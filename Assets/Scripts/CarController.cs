@@ -1,6 +1,15 @@
 using System.Collections;
 using UnityEngine;
 
+public enum CarStates
+{
+    IDLE,
+    ACCELERATING,
+    MOVING,
+    MOVING_BACK,
+    BREAKING
+}
+
 [System.Serializable]
 public sealed class WheelInfo
 {
@@ -18,19 +27,20 @@ public sealed class CarController : MonoBehaviour
     [SerializeField] private WheelInfo _wheelRearRight;
 
     [Header("Parameters")]
-    [SerializeField] private float _maxSteeringAngle;    
+    [SerializeField] private float _maxSteeringAngle;
     [SerializeField] private float _wheelTorque;
     [SerializeField] private float _moveBackSpeed;
-    [SerializeField] private float _moveSpeed;
+    [SerializeField] private float _minMoveSpeed;
 
+    private CarStates _state;
     private Rigidbody _rigidbody;
     private Coroutine _moveCoroutine;
-    private Coroutine _breakCoroutine;
-    private bool _started;
+    private bool _steering;
 
+    #region Standart Unity Functions
     private void Start()
     {
-        _started = false;
+        _state = CarStates.IDLE;
         _rigidbody = GetComponent<Rigidbody>();
     }
 
@@ -40,18 +50,21 @@ public sealed class CarController : MonoBehaviour
             _rigidbody.velocity += _rigidbody.velocity.magnitude * speedPlatform.SpeedScaler * other.transform.forward;
     }
 
-    private void FixedUpdate() => UpdateWheelVisuals();
-
-    public void HandleSteering(float angle)
+    private void OnCollisionEnter(Collision collision)
     {
-        angle *= _maxSteeringAngle;
-
-        _wheelFrontRight.Collider.steerAngle = angle;
-        _wheelFrontLeft.Collider.steerAngle = angle;
+        if (collision.gameObject.TryGetComponent(out Wall _))
+        {
+            StopMoving();
+            _state = CarStates.IDLE;
+        }
     }
 
+    private void FixedUpdate() => UpdateWheelVisuals();
+    #endregion
+
+    #region Hellper Functions
     private void UpdateWheelVisuals()
-    {   
+    {
         UpdateWheelVisual(_wheelRearRight);
         UpdateWheelVisual(_wheelRearLeft);
         UpdateWheelVisual(_wheelFrontRight);
@@ -64,27 +77,15 @@ public sealed class CarController : MonoBehaviour
         wheel.Mesh.SetPositionAndRotation(wheelPosition, wheelRotation);
     }
 
-    private IEnumerator GainAcceleration(float acceleration, int period)
+    private void StopMoving()
     {
-        SetAcceleration(acceleration);
-        yield return new WaitForSeconds(period);
-        SetAcceleration(0f);
-        _moveCoroutine = null;
-    }
-
-    private IEnumerator StopCar()
-    {
-        float timer = _rigidbody.velocity.magnitude / 3.0f;
         SetAcceleration(0f);
 
-        do
+        if (_moveCoroutine != null)
         {
-            _rigidbody.velocity = Vector3.Slerp(_rigidbody.velocity, Vector3.zero, timer *  Time.deltaTime);
-            yield return null;
-        } while (_wheelRearLeft.Collider.isGrounded && _rigidbody.velocity.magnitude > 0.001f);
-
-        _rigidbody.velocity = Vector3.zero;
-        _breakCoroutine = null;
+            StopCoroutine(_moveCoroutine);
+            _moveCoroutine = null;
+        }
     }
 
     private void SetAcceleration(float torqueScale)
@@ -94,37 +95,114 @@ public sealed class CarController : MonoBehaviour
         _wheelRearRight.Collider.motorTorque = torque;
     }
 
-    public void StartMoving()
+    private void SetBrakers(float brakeForce)
     {
-        if (!_started && _wheelRearLeft.Collider.isGrounded && _moveCoroutine == null)
-        {
-            _moveCoroutine = StartCoroutine(GainAcceleration(_moveSpeed, 3));
-            _started = true;
-        }
+        _wheelRearLeft.Collider.brakeTorque = brakeForce;
+        _wheelRearRight.Collider.brakeTorque = brakeForce;
     }
-    
+    #endregion
+
+    #region Movement Enumerators
+    private IEnumerator StartAcceleration()
+    {
+        float acceleration = (_rigidbody.velocity.magnitude < _minMoveSpeed) ? _minMoveSpeed : _rigidbody.velocity.magnitude * 0.05f;
+        SetAcceleration(acceleration);
+        yield return new WaitForSeconds(1);
+        SetAcceleration(0f);
+
+        _moveCoroutine = null;
+    }
+
+    private IEnumerator StartMoving()
+    {
+        float timer = 0.0f;
+        _state = CarStates.MOVING;
+
+        // Accelerating first 2 seconds to gain movement
+        while (timer <= 2.0f && _state == CarStates.MOVING)
+        {
+            timer += Time.deltaTime;
+            SetAcceleration(1);
+            yield return null;
+        }
+
+        SetAcceleration(0f);
+        _state = CarStates.ACCELERATING;
+        _moveCoroutine = null;
+    }
+
+    private IEnumerator StartBraking()
+    {
+        StopMoving();
+        _state = CarStates.BREAKING;
+        float timer = 0.0f;
+
+        // Checking for 2 instead of 3, because we have a wheel based movement, so little force will last on the wheels
+        // and we will need manually set brakers
+        while (timer <= 2.0f && _state == CarStates.BREAKING && _wheelRearLeft.Collider.isGrounded && _wheelRearRight.Collider.isGrounded)
+        {
+            _rigidbody.velocity = Vector3.Slerp(_rigidbody.velocity, Vector3.zero, 3f * timer * Time.deltaTime);
+            timer += Time.deltaTime;
+            yield return null;
+        }
+
+        // Setting brakers to discard of forces applied to wheels
+        SetBrakers(Mathf.Infinity);
+        _state = CarStates.IDLE;
+    }
+
+    private IEnumerator StartMovingBack()
+    {
+        SetBrakers(0f);
+        _state = CarStates.MOVING_BACK;
+
+        while (_state == CarStates.MOVING_BACK)
+        {
+            if (_rigidbody.velocity.magnitude < _moveBackSpeed)
+                SetAcceleration(-_moveBackSpeed);
+            else
+                SetAcceleration(0);
+            yield return null;
+        }
+
+        SetAcceleration(0f);
+    }
+    #endregion
+
+    #region Controller Interface
     public void Accelerate()
     {
-        if(_started && _wheelRearLeft.Collider.isGrounded && _moveCoroutine == null && _breakCoroutine == null)
-            _moveCoroutine = StartCoroutine(GainAcceleration(_rigidbody.velocity.magnitude * 0.05f, 1));
+        if (_wheelRearLeft.Collider.isGrounded && _wheelRearRight.Collider.isGrounded && _moveCoroutine == null)
+        {
+            SetBrakers(0f); // in case of breaking interrupt
+
+            if (_state == CarStates.ACCELERATING)
+                _moveCoroutine = StartCoroutine(StartAcceleration());
+            else
+                _moveCoroutine = StartCoroutine(StartMoving());
+        }
     }
 
     public void Brake()
     {
-        if (_rigidbody.velocity.magnitude > 0.01f)
-        {
-            _started = false;
-
-            if (_moveCoroutine != null)
-            {
-                StopCoroutine(_moveCoroutine);
-                _moveCoroutine = null;
-            }
-
-            if (_wheelRearLeft.Collider.isGrounded)
-                _breakCoroutine = StartCoroutine(StopCar());
-        }
-        else
-            _moveCoroutine = StartCoroutine(GainAcceleration(-_moveBackSpeed, 1));
+        if(_state == CarStates.IDLE)
+            StartCoroutine(StartMovingBack());
+        else if (_state != CarStates.BREAKING)
+            StartCoroutine(StartBraking());
     }
+
+    public void HandleSteering(float angle)
+    {
+        _steering = angle != 0.0f;
+
+        // Compensation during turn
+        if (_steering && (_state == CarStates.MOVING || _state == CarStates.ACCELERATING))
+            _rigidbody.velocity += (transform.right * angle + transform.forward)  * Time.deltaTime;
+
+        angle *= _maxSteeringAngle;
+
+        _wheelFrontRight.Collider.steerAngle = angle;
+        _wheelFrontLeft.Collider.steerAngle = angle;
+    }
+    #endregion
 }
