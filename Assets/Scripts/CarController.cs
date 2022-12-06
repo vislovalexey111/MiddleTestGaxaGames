@@ -1,9 +1,10 @@
-using System.Collections;
+﻿using System.Collections;
 using UnityEngine;
 
 public enum CarStates
 {
     IDLE,
+    STOPED,
     ACCELERATING,
     MOVING,
     MOVING_BACK,
@@ -31,35 +32,62 @@ public sealed class CarController : MonoBehaviour
     [SerializeField] private float _wheelTorque;
     [SerializeField] private float _moveBackSpeed;
     [SerializeField] private float _minMoveSpeed;
+    [SerializeField] private float _stopParam;
 
+    private bool _isGrounded;
+    private float _currentAcceleration;
+    private float _currentSpeed;
     private CarStates _state;
     private Rigidbody _rigidbody;
-    private Coroutine _moveCoroutine;
-    private bool _steering;
 
     #region Standart Unity Functions
     private void Start()
     {
+        _isGrounded = false;
+
         _state = CarStates.IDLE;
+        _currentAcceleration = _minMoveSpeed;
         _rigidbody = GetComponent<Rigidbody>();
     }
 
     private void OnTriggerEnter(Collider other)
     {
         if (other.TryGetComponent(out SpeedPlatform speedPlatform))
-            _rigidbody.velocity += _rigidbody.velocity.magnitude * speedPlatform.SpeedScaler * other.transform.forward;
-    }
-
-    private void OnCollisionEnter(Collision collision)
-    {
-        if (collision.gameObject.TryGetComponent(out Wall _))
         {
-            StopMoving();
-            _state = CarStates.IDLE;
+            float force = _currentSpeed * speedPlatform.SpeedScaler * _rigidbody.mass;
+            _rigidbody.AddForce(force * other.transform.forward, ForceMode.Impulse);
         }
     }
 
-    private void FixedUpdate() => UpdateWheelVisuals();
+    // In case we colliding with wall - we want to be able to start move again.
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (collision.gameObject.TryGetComponent(out Wall _) && _wheelRearLeft.Collider.rpm > _stopParam)
+        {
+            SetBrakers(Mathf.Infinity);
+            _state = CarStates.STOPED;
+        }
+    }
+
+    private void FixedUpdate()
+    {
+        _currentSpeed = _rigidbody.velocity.magnitude;
+        _isGrounded = _wheelRearLeft.Collider.isGrounded && _wheelRearRight.Collider.isGrounded;
+        
+        UpdateWheelVisuals();
+        
+        // We can contiously moving without acceleration and when the speed reaches 0 - we are still in idle, so we need to
+        // start braking for 3 seconds before we can move back (that's not a good situation). So we checking if in the idle
+        // state we reached almost zero veclocity.
+        if(_state == CarStates.IDLE && _currentSpeed < 0.1f)
+        {
+            _state = CarStates.STOPED;
+            SetBrakers(Mathf.Infinity);
+        }
+
+        // Uncomment this to display car state in the debug mode.
+        //Debug.Log(_state);
+    }
     #endregion
 
     #region Hellper Functions
@@ -77,17 +105,6 @@ public sealed class CarController : MonoBehaviour
         wheel.Mesh.SetPositionAndRotation(wheelPosition, wheelRotation);
     }
 
-    private void StopMoving()
-    {
-        SetAcceleration(0f);
-
-        if (_moveCoroutine != null)
-        {
-            StopCoroutine(_moveCoroutine);
-            _moveCoroutine = null;
-        }
-    }
-
     private void SetAcceleration(float torqueScale)
     {
         float torque = torqueScale * _wheelTorque;
@@ -103,63 +120,72 @@ public sealed class CarController : MonoBehaviour
     #endregion
 
     #region Movement Enumerators
-    private IEnumerator StartAcceleration()
+    private IEnumerator Accelerating()
     {
-        float acceleration = (_rigidbody.velocity.magnitude < _minMoveSpeed) ? _minMoveSpeed : _rigidbody.velocity.magnitude * 0.05f;
-        SetAcceleration(acceleration);
-        yield return new WaitForSeconds(1);
-        SetAcceleration(0f);
+        _state = CarStates.ACCELERATING;
 
-        _moveCoroutine = null;
+        while(_state == CarStates.ACCELERATING)
+        {
+            _currentAcceleration = _currentSpeed * 1.05f;
+            yield return new WaitForSeconds(1);
+        }
+        
+        SetAcceleration(0f);
     }
 
-    private IEnumerator StartMoving()
+    private IEnumerator Moving()
     {
-        float timer = 0.0f;
         _state = CarStates.MOVING;
 
-        // Accelerating first 2 seconds to gain movement
-        while (timer <= 2.0f && _state == CarStates.MOVING)
+        while ((_state == CarStates.MOVING || _state == CarStates.ACCELERATING) && _isGrounded)
         {
-            timer += Time.deltaTime;
-            SetAcceleration(1);
+            if (_currentSpeed < _currentAcceleration)
+                SetAcceleration(_currentAcceleration);
+            else
+                SetAcceleration(0f);
             yield return null;
         }
 
         SetAcceleration(0f);
-        _state = CarStates.ACCELERATING;
-        _moveCoroutine = null;
+        _currentAcceleration = _minMoveSpeed;
     }
 
-    private IEnumerator StartBraking()
+    private IEnumerator Brake()
     {
-        StopMoving();
         _state = CarStates.BREAKING;
         float timer = 0.0f;
 
-        // Checking for 2 instead of 3, because we have a wheel based movement, so little force will last on the wheels
-        // and we will need manually set brakers
-        while (timer <= 2.0f && _state == CarStates.BREAKING && _wheelRearLeft.Collider.isGrounded && _wheelRearRight.Collider.isGrounded)
+        // Counting 2 seconds instead of 3, because we have a wheel based movement, so little force will last on the wheels
+        // and we will need manually set brakers to discard of those forces
+        while (timer <= 2.0f && _state == CarStates.BREAKING && _isGrounded)
         {
             _rigidbody.velocity = Vector3.Slerp(_rigidbody.velocity, Vector3.zero, 3f * timer * Time.deltaTime);
             timer += Time.deltaTime;
             yield return null;
         }
 
-        // Setting brakers to discard of forces applied to wheels
-        SetBrakers(Mathf.Infinity);
-        _state = CarStates.IDLE;
+        // Setting brakers to discard of forces applied to wheels only if we not moving again
+        if (_state == CarStates.BREAKING)
+        {
+            SetBrakers(Mathf.Infinity);
+            _state = CarStates.STOPED;
+        }
     }
 
-    private IEnumerator StartMovingBack()
+    private IEnumerator MovingBack()
     {
-        SetBrakers(0f);
         _state = CarStates.MOVING_BACK;
-
-        while (_state == CarStates.MOVING_BACK)
+        
+        while (_state == CarStates.MOVING_BACK && _isGrounded)
         {
-            if (_rigidbody.velocity.magnitude < _moveBackSpeed)
-                SetAcceleration(-_moveBackSpeed);
+            if (_currentSpeed < _moveBackSpeed && _rigidbody.velocity != (transform.forward * -_moveBackSpeed))
+            {
+                if (_wheelRearLeft.Collider.rpm < _stopParam && _wheelRearRight.Collider.rpm < _stopParam)
+                {
+                    SetBrakers(0f);
+                    SetAcceleration(-_moveBackSpeed);
+                }
+            }
             else
                 SetAcceleration(0);
             yield return null;
@@ -172,32 +198,53 @@ public sealed class CarController : MonoBehaviour
     #region Controller Interface
     public void Accelerate()
     {
-        if (_wheelRearLeft.Collider.isGrounded && _wheelRearRight.Collider.isGrounded && _moveCoroutine == null)
-        {
-            SetBrakers(0f); // in case of breaking interrupt
+        if (_isGrounded && _state == CarStates.MOVING)
+            StartCoroutine(Accelerating());
+    }
 
-            if (_state == CarStates.ACCELERATING)
-                _moveCoroutine = StartCoroutine(StartAcceleration());
-            else
-                _moveCoroutine = StartCoroutine(StartMoving());
+    public void Move()
+    {
+        if (_isGrounded && _state != CarStates.MOVING && _state != CarStates.ACCELERATING)
+        {
+            SetBrakers(0f);
+            StartCoroutine(Moving());
         }
     }
 
-    public void Brake()
+    public void StopAccelerating()
     {
-        if(_state == CarStates.IDLE)
-            StartCoroutine(StartMovingBack());
-        else if (_state != CarStates.BREAKING)
-            StartCoroutine(StartBraking());
+        if (_state == CarStates.MOVING || _state == CarStates.ACCELERATING)
+        {
+            SetBrakers(_wheelTorque * _minMoveSpeed);
+            _state = CarStates.IDLE;
+        }
+    }
+
+    public void BrakeOrMoveBack()
+    {
+        if(_isGrounded)
+        {        
+            if(_state == CarStates.STOPED)
+                StartCoroutine(MovingBack());
+            else if (_state != CarStates.MOVING_BACK && _state != CarStates.BREAKING)
+                StartCoroutine(Brake());
+        }
+    }
+
+    public void StopMovingBack()
+    {
+        if(_state == CarStates.MOVING_BACK)
+        {
+            SetBrakers(Mathf.Infinity);
+            _state = CarStates.STOPED;
+        }
     }
 
     public void HandleSteering(float angle)
     {
-        _steering = angle != 0.0f;
-
         // Compensation during turn
-        if (_steering && (_state == CarStates.MOVING || _state == CarStates.ACCELERATING))
-            _rigidbody.velocity += (transform.right * angle + transform.forward)  * Time.deltaTime;
+        if (angle != 0.0f && (_state == CarStates.MOVING || _state == CarStates.ACCELERATING))
+            _rigidbody.velocity = Vector3.Slerp(_rigidbody.velocity, (transform.right * angle + transform.forward) * 6f, Time.deltaTime);
 
         angle *= _maxSteeringAngle;
 

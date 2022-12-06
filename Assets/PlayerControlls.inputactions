@@ -1,0 +1,74 @@
+{
+    "name": "PlayerControlls",
+    "maps": [
+        {
+            "name": "Car",
+            "id": "62040ba3-9027-4555-8c38-d377f4d312e6",
+            "actions": [
+                {
+                    "name": "Move",
+                    "type": "Button",
+                    "id": "6551fec9-0e9f-475f-be98-e614055718b2",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": true
+                },
+                {
+                    "name": "Accelerate",
+                    "type": "Button",
+                    "id": "c1ada9a6-33a3-49f3-befb-fc349b8e35d3",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "Hold(duration=3,pressPoint=0.001)",
+                    "initialStateCheck": true
+                },
+                {
+                    "name": "StopMovingBack",
+                    "type": "Button",
+                    "id": "524ed41f-6d61-45b4-aa9f-339adaf81d06",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "Press(pressPoint=0.001,behavior=1)",
+                    "initialStateCheck": true
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "ef1865b1-67b2-4517-a90d-aca7d0e91014",
+                    "path": "<Keyboard>/s",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "StopMovingBack",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "242feab0-2625-4e62-970f-aeefdaaa6b7d",
+                    "path": "<Keyboard>/w",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "Move",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "66c99b54-2299-493e-af4a-2f006f466040",
+                    "path": "<Keyboard>/w",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "Accelerate",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
+        }
+    ],
+    "controlSchemes": []
+}

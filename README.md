@@ -16,6 +16,6 @@ Car controls requirements.
 3. If no force applied - car must go in the direciton of the wheels.
 4. If car triggers Speed Board - accelerate car by 15% of the current speed along the arrow direction.
 5. By pressing 'W' - car must start moving.
-6. By holding 'W' - car must accelerate each second by 5% of the current speed.
+6. By holding 'W' - after 3 seconds car must accelerate each second by 5% of the current speed.
 7. By pressing 'S' while moving - stop the car in 3 seconds without being dependent on current speed.
 8. By pressing 'S' while not moving - car must start moving back with any desired speed.
